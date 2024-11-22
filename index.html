@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Probability Sampler</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 20px auto; padding: 20px; }
+        .container { display: grid; grid-template-columns: 80px 300px 80px; gap: 10px; align-items: center; }
+        .equation { 
+            background: #f5f5f5; 
+            padding: 15px; 
+            margin: 20px 0; 
+            font-family: monospace;
+            font-size: 16px;
+            white-space: pre-wrap;
+        }
+        button { padding: 8px 16px; margin: 5px; }
+        .chart-wrapper { 
+            position: relative;
+            height: 400px;
+            width: 100%;
+            margin: 20px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            background: white;
+        }
+        .results { margin: 20px 0; }
+        .flip { color: blue; }
+    </style>
+</head>
+<body>
+    <div class="equation">
+w1 * lognormal(0, sigma^2) + w2 * 0.5(dirac(0) + dirac(1)) + w3 * thomae_{100}(α) + w4 * uniform(0,1)
+    </div>
+
+    <div class="container">
+        <label>w1:</label>
+        <input type="range" id="w1" min="0" max="100" value="30">
+        <span id="w1Value">0.30</span>
+
+        <label>w2:</label>
+        <input type="range" id="w2" min="0" max="100" value="10">
+        <span id="w2Value">0.10</span>
+
+        <label>w3:</label>
+        <input type="range" id="w3" min="0" max="100" value="30">
+        <span id="w3Value">0.30</span>
+
+        <label>w4:</label>
+        <input type="range" id="w4" min="0" max="100" value="30">
+        <span id="w4Value">0.30</span>
+
+        <label>sigma:</label>
+        <input type="range" id="sigma" min="0" max="100" value="50">
+        <span id="sigmaValue">5.00</span>
+
+        <label>alpha:</label>
+        <input type="range" id="alpha" min="100" max="500" value="200">
+        <span id="alphaValue">2.00</span>
+    </div>
+
+    <div>
+        <button onclick="resetCoin()">Reset coin</button>
+        <button onclick="flipCoin()">Flip coin</button>
+        <button onclick="revealProbability()">Reveal chance</button>
+        <button onclick="resetWeights()">Reset weights</button>
+    </div>
+
+    <div class="results">
+        <div id="results"></div>
+        <div id="probability"></div>
+    </div>
+
+    <div class="chart-wrapper">
+        <canvas id="cdfPlot"></canvas>
+    </div>
+
+    <script>
+        let currentProb = null;
+        let chart = null;
+        let thomaeFractions = [];
+        let thomaeWeights = [];
+
+        function initThomae(alpha) {
+            const L = 100;
+            const mValues = Array.from({length: L}, (_, i) => i + 1);
+            const nValues = Array.from({length: L}, (_, i) => i + 1);
+            
+            thomaeFractions = mValues.flatMap(m => 
+                nValues.map(n => m/(m+n))
+            );
+            
+            thomaeWeights = mValues.flatMap(m => 
+                nValues.map(n => Math.pow(m*n, -alpha))
+            );
+            
+            const totalWeight = thomaeWeights.reduce((a, b) => a + b, 0);
+            thomaeWeights = thomaeWeights.map(w => w/totalWeight);
+            
+            const pairs = thomaeFractions.map((f, i) => [f, thomaeWeights[i]]);
+            pairs.sort((a, b) => a[0] - b[0]);
+            thomaeFractions = pairs.map(p => p[0]);
+            thomaeWeights = pairs.map(p => p[1]);
+            
+            for(let i = 1; i < thomaeWeights.length; i++) {
+                thomaeWeights[i] += thomaeWeights[i-1];
+            }
+        }
+
+        function thomaeCDF(x) {
+            const idx = thomaeFractions.findIndex(f => f > x);
+            if(idx === -1) return 1;
+            if(idx === 0) return 0;
+            return thomaeWeights[idx - 1];
+        }
+
+        function sampleThomae() {
+            const r = Math.random();
+            let left = 0, right = thomaeWeights.length - 1;
+            while(left < right) {
+                let mid = Math.floor((left + right) / 2);
+                if(thomaeWeights[mid] < r) left = mid + 1;
+                else right = mid;
+            }
+            return thomaeFractions[left];
+        }
+
+        function erf(x) {
+            const a1 =  0.254829592;
+            const a2 = -0.284496736;
+            const a3 =  1.421413741;
+            const a4 = -1.453152027;
+            const a5 =  1.061405429;
+            const p  =  0.3275911;
+
+            const sign = (x >= 0) ? 1 : -1;
+            x = Math.abs(x);
+
+            const t = 1.0/(1.0 + p*x);
+            const y = 1.0 - (((((a5*t + a4)*t) + a3)*t + a2)*t + a1)*t*Math.exp(-x*x);
+
+            return sign*y;
+        }
+
+        function normalCDF(x, mean = 0, std = 1) {
+            return 0.5 * (1 + erf((x - mean) / (std * Math.sqrt(2))));
+        }
+
+        function getParams() {
+            const w1 = Number(document.getElementById('w1').value) / 100;
+            const w2 = Number(document.getElementById('w2').value) / 100;
+            const w3 = Number(document.getElementById('w3').value) / 100;
+            const w4 = Number(document.getElementById('w4').value) / 100;
+            const sigma = Number(document.getElementById('sigma').value) / 10;
+            const alpha = Number(document.getElementById('alpha').value) / 100;
+            const total = w1 + w2 + w3 + w4;
+            return {w1: w1/total, w2: w2/total, w3: w3/total, w4: w4/total, 
+                   sigma, alpha};
+        }
+
+        function updatePlot() {
+            try {
+                const ctx = document.getElementById('cdfPlot');
+                if (!ctx) return;
+
+                const params = getParams();
+                initThomae(params.alpha);
+
+                const xPoints = Array.from({length: 101}, (_, i) => i/100);
+                const yPoints = xPoints.map(x => {
+                    let cdf = 0;
+                    // Lognormal
+                    if (x > 0 && x < 1) {
+                        const logodds = Math.log(x/(1-x));
+                        cdf += params.w1 * normalCDF(logodds, 0, params.sigma);
+                    }
+                    if (x >= 1) cdf += params.w1;
+                    
+                    // Deterministic
+                    if (x > 0) cdf += params.w2 * 0.5;
+                    if (x >= 1) cdf += params.w2 * 0.5;
+                    
+                    // Thomae
+                    cdf += params.w3 * thomaeCDF(x);
+                    
+                    // Uniform
+                    if (x > 0 && x < 1) cdf += params.w4 * x;
+                    if (x >= 1) cdf += params.w4;
+                    
+                    return cdf;
+                });
+
+                if (chart) chart.destroy();
+                
+                chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: xPoints,
+                        datasets: [{
+                            label: 'CDF',
+                            data: yPoints,
+                            borderColor: 'blue',
+                            fill: false,
+                            pointRadius: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: {title: {display: true, text: 'Probability'}},
+                            y: {title: {display: true, text: 'Cumulative Probability'}}
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Error creating chart:', error);
+            }
+        }
+
+        function sampleProbability() {
+            const params = getParams();
+            initThomae(params.alpha);
+            
+            const r = Math.random();
+            let cumProb = 0;
+            
+            // Lognormal
+            cumProb += params.w1;
+            if(r < cumProb) {
+                const logodds = params.sigma * normalRandom();
+                return 1 / (1 + Math.exp(-logodds));
+            }
+            
+            // Deterministic
+            cumProb += params.w2;
+            if(r < cumProb) return Math.random() < 0.5 ? 0 : 1;
+            
+            // Thomae
+            cumProb += params.w3;
+            if(r < cumProb) return sampleThomae();
+            
+            // Uniform
+            return Math.random();
+        }
+
+        function normalRandom() {
+            let u = 0, v = 0;
+            while(u === 0) u = Math.random();
+            while(v === 0) v = Math.random();
+            return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+        }
+
+        function updateSliderValue(id) {
+            const value = document.getElementById(id).value / 
+                (id === 'sigma' ? 10 : id === 'alpha' ? 100 : 100);
+            document.getElementById(id + 'Value').textContent = value.toFixed(2);
+            updatePlot();
+        }
+
+        function resetWeights() {
+            document.getElementById('w1').value = 30;
+            document.getElementById('w2').value = 20;
+            document.getElementById('w3').value = 30;
+            document.getElementById('w4').value = 20;
+            document.getElementById('sigma').value = 50;
+            document.getElementById('alpha').value = 200;
+            ['w1', 'w2', 'w3', 'w4', 'sigma', 'alpha'].forEach(updateSliderValue);
+        }
+
+        function resetCoin() {
+            currentProb = sampleProbability();
+            document.getElementById('results').innerHTML = '';
+            document.getElementById('probability').style.display = 'none';
+            document.getElementById('probability').innerHTML = 
+                `Current probability: ${currentProb.toFixed(4)}`;
+        }
+
+        function flipCoin() {
+            if (currentProb === null) {
+                alert('Please reset the coin first!');
+                return;
+            }
+            const result = Math.random() < currentProb ? 1 : 0;
+            const resultDiv = document.getElementById('results');
+            resultDiv.innerHTML += `<span class="flip">${result}</span> `;
+        }
+
+        function revealProbability() {
+            if (currentProb === null) {
+                alert('Please reset the coin first!');
+                return;
+            }
+            document.getElementById('probability').style.display = 'block';
+        }
+
+        ['w1', 'w2', 'w3', 'w4', 'sigma', 'alpha'].forEach(id => {
+            document.getElementById(id).addEventListener('input', () => updateSliderValue(id));
+        });
+
+        window.onload = function() {
+            if (typeof Chart === 'undefined') {
+                alert('Chart.js failed to load! Please check your internet connection.');
+                return;
+            }
+            updatePlot();
+            resetCoin();
+        }
+    </script>
+</body>
+</html>
