@@ -1,7 +1,7 @@
 # C.Leonardo's Law of Succession
 An interactive demo exploring an alternative to Laplace's Rule of Succession, with a more realistic prior over probabilities
 
-Read the full explanation in my [LessWrong post](link-to-post).
+Read the full explanation in my [LessWrong post](https://www.lesswrong.com/posts/Gycja4SwB5T4qPW9k/rethinking-laplace-s-rule-of-succession).
 
 ## The Prior Distribution
 
